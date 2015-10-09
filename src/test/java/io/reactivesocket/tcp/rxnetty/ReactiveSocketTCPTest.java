@@ -37,8 +37,22 @@ import java.util.concurrent.CountDownLatch;
 
 public class ReactiveSocketTCPTest {
 
-    @Test(timeout = 30_000)
-    public void test() throws Exception {
+    @Test(timeout = 5_00000000)
+    public void test100() throws Exception {
+        testN(100);
+    }
+
+    @Test(timeout = 5_000)
+    public void test10_000() throws Exception {
+        testN(10_000);
+    }
+
+    @Test(timeout = 5_000)
+    public void test100_000() throws Exception {
+        testN(100_000);
+    }
+
+    public void testN(int n) throws Exception {
         TcpServer<ByteBuf, ByteBuf> tcpServer = TcpServer.newServer(12345);
         tcpServer.start(ReactiveSocketTCPServer.create(new ConnectionSetupHandler() {
             @Override
@@ -46,7 +60,6 @@ public class ReactiveSocketTCPTest {
                 return new RequestHandler() {
                     @Override
                     public Publisher<Payload> handleRequestResponse(Payload payload) {
-                        System.out.println("Got => " + payload.toString());
                         Payload resp = TestUtil.utf8EncodedPayload("pong", "pong meta data");
                         return new Publisher<Payload>() {
                             @Override
@@ -94,12 +107,12 @@ public class ReactiveSocketTCPTest {
 
         TestSubscriber testSubscriber = new TestSubscriber();
 
-        CountDownLatch latch = new CountDownLatch(1);
+        CountDownLatch latch = new CountDownLatch(n);
 
         Observable
-            .range(0, 1)
+            .range(0, n)
             .flatMap(i -> {
-                Publisher<Payload> payloadPublisher = client.requestResponse(TestUtil.utf8EncodedPayload("ping => " + i, "oing metadata"));
+                Publisher<Payload> payloadPublisher = client.requestResponse(TestUtil.utf8EncodedPayload("ping => " + i, "ping metadata"));
                 return RxReactiveStreams.toObservable(payloadPublisher).doOnNext(f -> latch.countDown());
             })
             .subscribe();
