@@ -15,39 +15,100 @@
  */
 package io.reactivesocket.tcp.rxnetty;
 
-import static rx.Observable.just;
-
-import org.junit.Test;
-
 import io.netty.buffer.ByteBuf;
+import io.reactivesocket.ConnectionSetupHandler;
+import io.reactivesocket.ConnectionSetupPayload;
+import io.reactivesocket.Payload;
+import io.reactivesocket.ReactiveSocket;
+import io.reactivesocket.RequestHandler;
+import io.reactivesocket.exceptions.SetupException;
+import io.reactivesocket.tcp.rxnetty.server.ReactiveSocketTCPServer;
+import io.reactivex.netty.channel.Connection;
 import io.reactivex.netty.protocol.tcp.client.TcpClient;
 import io.reactivex.netty.protocol.tcp.server.TcpServer;
-import rx.Single;
+import org.junit.Test;
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscriber;
+import rx.Observable;
+import rx.RxReactiveStreams;
+import rx.observers.TestSubscriber;
+
+import java.util.concurrent.CountDownLatch;
 
 public class ReactiveSocketTCPTest {
 
-    @Test
-    public void test() {
-        // create protocol with handlers
-        ReactiveSocketTCP reactiveSocketTCP = ReactiveSocketTCP.create(
-                requestResponse -> {
-                    return Single.just("hello" + requestResponse);
-                } , requestStream -> {
-                    return just("a_" + requestStream, "b_" + requestStream);
-                } , null, null);
+    @Test(timeout = 30_000)
+    public void test() throws Exception {
+        TcpServer<ByteBuf, ByteBuf> tcpServer = TcpServer.newServer(12345);
+        tcpServer.start(ReactiveSocketTCPServer.create(new ConnectionSetupHandler() {
+            @Override
+            public RequestHandler apply(ConnectionSetupPayload setupPayload) throws SetupException {
+                return new RequestHandler() {
+                    @Override
+                    public Publisher<Payload> handleRequestResponse(Payload payload) {
+                        System.out.println("Got => " + payload.toString());
+                        Payload resp = TestUtil.utf8EncodedPayload("pong", "pong meta data");
+                        return new Publisher<Payload>() {
+                            @Override
+                            public void subscribe(Subscriber<? super Payload> s) {
+                                s.onNext(resp);
+                                s.onComplete();
+                            }
+                        };
+                    }
 
-        // start server with protocol
-        TcpServer<ByteBuf, ByteBuf> server = TcpServer.newServer();
-        int port = server.getServerPort();
-        server.start(reactiveSocketTCP::acceptConnection);
+                    @Override
+                    public Publisher<Payload> handleRequestStream(Payload payload) {
+                        return null;
+                    }
 
-        // TODO send actual requests
-        TcpClient.newClient("localhost", port)
-                .createConnectionRequest()
-                .flatMap(connection -> {
-                    return connection.getInput();
-                });
+                    @Override
+                    public Publisher<Payload> handleSubscription(Payload payload) {
+                        return null;
+                    }
 
-        server.shutdown();
+                    @Override
+                    public Publisher<Void> handleFireAndForget(Payload payload) {
+                        return null;
+                    }
+
+                    @Override
+                    public Publisher<Payload> handleChannel(Payload initialPayload, Publisher<Payload> payloads) {
+                        return null;
+                    }
+
+                    @Override
+                    public Publisher<Void> handleMetadataPush(Payload payload) {
+                        return null;
+                    }
+                };
+
+            }
+        }));
+
+        TcpClient<ByteBuf, ByteBuf> localhost = TcpClient.newClient("localhost", 12345);
+        Connection<ByteBuf, ByteBuf> connection = localhost.createConnectionRequest().toBlocking().last();
+        TcpDuplexConnection duplexConnection = TcpDuplexConnection.createTcpConnection(connection);
+        ReactiveSocket client = ReactiveSocket.fromClientConnection(duplexConnection, ConnectionSetupPayload.create("UTF-8", "UTF-8", ConnectionSetupPayload.NO_FLAGS));
+        client.startAndWait();
+
+        TestSubscriber testSubscriber = new TestSubscriber();
+
+        CountDownLatch latch = new CountDownLatch(1);
+
+        Observable
+            .range(0, 1)
+            .flatMap(i -> {
+                Publisher<Payload> payloadPublisher = client.requestResponse(TestUtil.utf8EncodedPayload("ping => " + i, "oing metadata"));
+                return RxReactiveStreams.toObservable(payloadPublisher).doOnNext(f -> latch.countDown());
+            })
+            .subscribe();
+
+        latch.await();
+
+        //testSubscriber.awaitTerminalEvent(3, TimeUnit.SECONDS);
+        //testSubscriber.assertValueCount(1);
+        //testSubscriber.assertCompleted();
+
     }
 }
